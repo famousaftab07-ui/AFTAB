@@ -6,7 +6,7 @@
 import express from 'express';
 import basicAuth from 'express-basic-auth';
 import { PORT, BOT_NAME, PANEL_USER, PANEL_PASS, MAX_SESSIONS } from './lib/config.js';
-import { add, remove, summary, sessions, get } from './lib/manager.js';
+import { add, remove, summary, sessions, pairingInFlight } from './lib/manager.js';
 
 export function startPanel(log = console.log) {
   const app = express();
@@ -28,46 +28,80 @@ export function startPanel(log = console.log) {
 
   // Start a new session. Returns a pairing code the user types into WhatsApp.
   app.post('/pair', async (req, res) => {
+    const number = String(req.body?.number || '').replace(/[^0-9]/g, '');
+    if (number.length < 8) {
+      return res.status(400).json({ error: 'enter a full phone number with country code' });
+    }
+
+    // A second request for the same number would tear down the socket of the
+    // pairing already in flight, killing the code the user is holding.
+    if (pairingInFlight.has(number)) {
+      return res.status(429).json({ error: 'a code for this number was just created — enter it in WhatsApp' });
+    }
+
+    const existing = sessions.get(number);
+    // Already linked: never touch it. A linked number must be unlinked from the
+    // phone (or via DELETE /sessions/:number), not by asking for a new code.
+    if (existing && existing.isRegistered()) {
+      return res.status(409).json({
+        error: existing.online
+          ? 'this number is already linked'
+          : 'this number is linked but offline — it will reconnect on its own; unlink it first to pair again',
+      });
+    }
+
+    pairingInFlight.add(number);
     try {
-      const number = String(req.body?.number || '').replace(/[^0-9]/g, '');
-      if (number.length < 8) return res.status(400).json({ error: 'enter a full phone number with country code' });
-      const existing = sessions.get(number);
-      if (existing && existing.online) {
-        return res.status(409).json({ error: 'this number is already linked and online' });
-      }
-      // A session that is present but never came online is a half-finished
-      // attempt; drop it so the user can ask for a fresh code.
-      if (existing && !existing.online) {
-        await remove(number);
-      }
+      // Any leftover folder for this number is a dead half-pairing. Clear it so
+      // the new socket starts clean instead of trying to log in with it.
+      await remove(number);
 
       const session = await add(number, { log });
 
       // WhatsApp only accepts a pairing request once the socket has finished
       // its handshake and shown a QR. Asking earlier closes the connection and
-      // the code dies instantly. So wait for that moment, with a ceiling.
-      const ready = await waitForSocketReady(session, 30000);
+      // the code dies instantly.
+      const ready = await waitForSocketReady(session, 20000);
       if (!ready) {
+        await remove(number);
         return res.status(504).json({
           error: 'WhatsApp did not answer in time — try again in a few seconds.',
         });
       }
 
-      let code = null;
+      if (session.isRegistered()) {
+        await remove(number);
+        return res.status(409).json({ error: 'this number is already linked' });
+      }
+
+      let code;
       try {
         code = await session.sock.requestPairingCode(number);
       } catch (err) {
+        await remove(number);
         return res.status(500).json({ error: `could not create pairing code: ${err.message}` });
       }
-      return res.json({ ok: true, number, code });
-    } catch (err) {
-      return res.status(500).json({ error: err.message });
+
+      // The code expires if it is not entered. Drop the session and its folder
+      // after two minutes so the next request starts from a clean slate.
+      setTimeout(() => {
+        const s = sessions.get(number);
+        if (s && !s.isRegistered()) {
+          log(`[panel] pairing code for ${number} was not used — clearing it`);
+          remove(number).catch(() => {});
+        }
+      }, 120000);
+
+      return res.json({ ok: true, number, code, expiresInSeconds: 120 });
+    } finally {
+      pairingInFlight.delete(number);
     }
   });
 
-  // Unlink a session and delete its stored credentials.
+  // Unlink a session: stop it, tell WhatsApp to log the device out, and delete
+  // the stored credentials.
   app.delete('/sessions/:number', async (req, res) => {
-    const ok = await remove(req.params.number);
+    const ok = await remove(req.params.number, { unlink: true });
     return res.json({ ok });
   });
 
@@ -87,7 +121,7 @@ function waitForSocketReady(session, timeoutMs = 30000) {
       if (session.online || session.qr) {
         clearInterval(timer);
         resolve(true);
-      } else if (Date.now() - started > timeoutMs) {
+      } else if (session.stopped || Date.now() - started > timeoutMs) {
         clearInterval(timer);
         resolve(false);
       }
@@ -121,7 +155,7 @@ const PAGE = `<!doctype html><html lang="en">
   table { width:100%; border-collapse:collapse; font-size:14px; }
   th, td { text-align:left; padding:9px 8px; border-bottom:1px solid #22303c; }
   th { color:#8b98a5; font-weight:500; font-size:12px; text-transform:uppercase; letter-spacing:.6px; }
-  .on { color:#4ade80; } .off { color:#f87171; }
+  .on { color:#4ade80; } .off { color:#f87171; } .pend { color:#fbbf24; }
   .hint { color:#8b98a5; font-size:13px; margin-top:14px; line-height:1.6; }
   code { background:#0e151c; padding:2px 6px; border-radius:5px; }
 </style>
@@ -140,7 +174,7 @@ const PAGE = `<!doctype html><html lang="en">
     <div id="out"></div>
     <div class="hint">
       In WhatsApp: <b>Settings &rarr; Linked devices &rarr; Link a device &rarr; Link with phone number</b>,
-      then type the code above.
+      then type the code above. <b>Enter it within 2 minutes</b> — an unused code is discarded automatically.
     </div>
   </div>
 
@@ -157,7 +191,10 @@ const PAGE = `<!doctype html><html lang="en">
 async function pair() {
   const number = document.getElementById('num').value.replace(/[^0-9]/g, '');
   const out = document.getElementById('out');
+  const btn = document.querySelector('#num + button');
   if (number.length < 8) { out.innerHTML = '<div class="hint" style="color:#f87171">Enter a full number with country code.</div>'; return; }
+  if (btn.disabled) return;
+  btn.disabled = true;
   out.innerHTML = '<div class="hint">Creating pairing code…</div>';
   try {
     const r = await fetch('/pair', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ number }) });
@@ -167,6 +204,8 @@ async function pair() {
     load();
   } catch (e) {
     out.innerHTML = '<div class="hint" style="color:#f87171">' + e.message + '</div>';
+  } finally {
+    btn.disabled = false;
   }
 }
 
