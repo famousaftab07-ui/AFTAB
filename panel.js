@@ -31,9 +31,28 @@ export function startPanel(log = console.log) {
     try {
       const number = String(req.body?.number || '').replace(/[^0-9]/g, '');
       if (number.length < 8) return res.status(400).json({ error: 'enter a full phone number with country code' });
-      if (sessions.has(number)) return res.status(409).json({ error: 'this number is already linked' });
+      const existing = sessions.get(number);
+      if (existing && existing.online) {
+        return res.status(409).json({ error: 'this number is already linked and online' });
+      }
+      // A session that is present but never came online is a half-finished
+      // attempt; drop it so the user can ask for a fresh code.
+      if (existing && !existing.online) {
+        await remove(number);
+      }
 
       const session = await add(number, { log });
+
+      // WhatsApp only accepts a pairing request once the socket has finished
+      // its handshake and shown a QR. Asking earlier closes the connection and
+      // the code dies instantly. So wait for that moment, with a ceiling.
+      const ready = await waitForSocketReady(session, 30000);
+      if (!ready) {
+        return res.status(504).json({
+          error: 'WhatsApp did not answer in time — try again in a few seconds.',
+        });
+      }
+
       let code = null;
       try {
         code = await session.sock.requestPairingCode(number);
@@ -58,8 +77,25 @@ export function startPanel(log = console.log) {
   return server;
 }
 
-const PAGE = `<!doctype html>
-<html lang="en">
+// Resolve as soon as the socket has a QR (handshake done) or is already open.
+// Resolves false if it never gets there inside the ceiling.
+function waitForSocketReady(session, timeoutMs = 30000) {
+  if (session.online || session.qr) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const timer = setInterval(() => {
+      if (session.online || session.qr) {
+        clearInterval(timer);
+        resolve(true);
+      } else if (Date.now() - started > timeoutMs) {
+        clearInterval(timer);
+        resolve(false);
+      }
+    }, 250);
+  });
+}
+
+const PAGE = `<!doctype html><html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
