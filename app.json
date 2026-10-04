@@ -1,0 +1,35 @@
+{
+  "name": "AFTAB",
+  "description": "AFTAB — Multi-Session WhatsApp Bot. One server, many linked sessions.",
+  "keywords": ["whatsapp", "bot", "baileys", "multi-session", "nodejs"],
+  "repository": "https://github.com/famousaftab07-ui/AFTAB",
+  "logo": "https://raw.githubusercontent.com/famousaftab07-ui/AFTAB/main/assets/logo.png",
+  "stack": "container",
+  "env": {
+    "PORT": {
+      "description": "Port the pairing panel listens on.",
+      "value": "12637",
+      "required": false
+    },
+    "PANEL_USER": {
+      "description": "Username for the pairing panel.",
+      "value": "aftab",
+      "required": false
+    },
+    "PANEL_PASS": {
+      "description": "Password for the pairing panel. Change this before making the app public.",
+      "value": "aftab",
+      "required": false
+    },
+    "MAX_SESSIONS": {
+      "description": "How many WhatsApp sessions this instance may run at once.",
+      "value": "50",
+      "required": false
+    },
+    "SESSION_DIR": {
+      "description": "Folder holding the linked session credentials.",
+      "value": "./session",
+      "required": false
+    }
+  }
+}
