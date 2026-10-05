@@ -1,0 +1,8 @@
+# Heroku container-stack build manifest.
+#
+# Heroku builds the image from the Dockerfile below and runs the web process.
+# Without this file the container stack has nothing to build and the deploy
+# fails before the app ever boots.
+build:
+  docker:
+    web: Dockerfile

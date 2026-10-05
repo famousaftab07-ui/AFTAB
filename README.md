@@ -16,8 +16,33 @@ deploy, no second server.
 Click the button, give the app a name, hit **Deploy**. When it finishes, open the app URL —
 that is your pairing page.
 
+This repo ships with everything the Heroku **container** stack needs:
+
+- `heroku.yml` — tells Heroku to build `Dockerfile` for the `web` process. Without it a
+  container-stack app has no build target and the deploy fails before the app boots.
+- `Dockerfile` — builds the image and creates `/app/session` writable for the non-root user
+  Heroku runs containers as.
+- `app.json` — sets the deploy defaults. It deliberately does **not** set `PORT`, because
+  Heroku assigns `PORT` itself; hardcoding it causes an `R10` boot timeout.
+
 > **First thing after deploying:** set `PANEL_PASS` in the app's **Config Vars** to something
 > private. The default password is `aftab`, and the pairing page is public.
+
+### If the deploy fails
+
+| Symptom in `heroku logs --tail` | Cause | Fix |
+|---|---|---|
+| `R10` / `H10` boot timeout, app never opens | The app did not bind to the port Heroku assigned | The app reads `process.env.PORT` and binds `0.0.0.0` — make sure you did not set `PORT` yourself in Config Vars (`heroku config:unset PORT`) |
+| `EACCES: permission denied, open 'session/...'` | The session folder is owned by root but Heroku runs the container as non-root | Already handled: the image chmods `/app/session` to `777`. Redeploy so the new image is used |
+| Build fails with no language/buildpack detected | App is on the container stack but there is no `heroku.yml`/`Dockerfile` | Both files are in the repo; push them and redeploy |
+| Sessions disappear after a restart | Heroku's filesystem is ephemeral | Re-link, or point `SESSION_DIR` at an attached store (see below) |
+
+To deploy the current `main` branch manually:
+
+```bash
+heroku create your-app-name --stack container
+git push heroku main
+```
 
 ---
 
