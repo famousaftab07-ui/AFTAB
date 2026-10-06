@@ -107,7 +107,11 @@ export function startPanel(log = console.log) {
 
   app.get('/', (_req, res) => res.type('html').send(PAGE));
 
-  const server = app.listen(PORT, () => log(`[panel] ${BOT_NAME} panel on http://0.0.0.0:${PORT}`));
+  // Bind to 0.0.0.0 so Heroku's router can reach the dyno. Binding to
+  // localhost would leave the app unreachable and cause an R10 boot timeout.
+  const server = app.listen(PORT, '0.0.0.0', () =>
+    log(`[panel] ${BOT_NAME} panel on http://0.0.0.0:${PORT}`),
+  );
   return server;
 }
 

@@ -6,11 +6,6 @@
   "logo": "https://raw.githubusercontent.com/famousaftab07-ui/AFTAB/main/assets/logo.png",
   "stack": "container",
   "env": {
-    "PORT": {
-      "description": "Port the pairing panel listens on.",
-      "value": "12637",
-      "required": false
-    },
     "PANEL_USER": {
       "description": "Username for the pairing panel.",
       "value": "aftab",
@@ -28,7 +23,7 @@
     },
     "SESSION_DIR": {
       "description": "Folder holding the linked session credentials.",
-      "value": "./session",
+      "value": "/app/session",
       "required": false
     }
   }
