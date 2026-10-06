@@ -34,15 +34,21 @@ This repo ships with everything the Heroku **container** stack needs:
 |---|---|---|
 | `R10` / `H10` boot timeout, app never opens | The app did not bind to the port Heroku assigned | The app reads `process.env.PORT` and binds `0.0.0.0` — make sure you did not set `PORT` yourself in Config Vars (`heroku config:unset PORT`) |
 | `EACCES: permission denied, open 'session/...'` | The session folder is owned by root but Heroku runs the container as non-root | Already handled: the image chmods `/app/session` to `777`. Redeploy so the new image is used |
-| Build fails with no language/buildpack detected | App is on the container stack but there is no `heroku.yml`/`Dockerfile` | Both files are in the repo; push them and redeploy |
+| `Your app does not include a heroku.yml build manifest` | The branch you deployed has no `heroku.yml`, so the container stack has nothing to build | Make sure `heroku.yml` is on the branch you push (it is on `main`) |
+| `App not compatible with buildpack` / no buildpack detected | The app is not on the container stack, so Heroku tried buildpacks | `heroku stack:set container --app your-app-name`, then redeploy |
 | Sessions disappear after a restart | Heroku's filesystem is ephemeral | Re-link, or point `SESSION_DIR` at an attached store (see below) |
 
-To deploy the current `main` branch manually:
+### Manual deploy (Heroku CLI)
 
 ```bash
-heroku create your-app-name --stack container
+heroku login
+heroku create your-app-name --stack container      # the container stack is required
+heroku config:set PANEL_PASS='pick-something-private' --app your-app-name
 git push heroku main
+heroku logs --tail --app your-app-name
 ```
+
+Then open the app URL: `heroku open --app your-app-name`.
 
 ---
 
